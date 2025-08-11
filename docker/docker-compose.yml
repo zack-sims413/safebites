@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgis/postgis:15-3.3
+    container_name: safebites-postgres
+    environment:
+      POSTGRES_DB: safebites
+      POSTGRES_USER: safebites_user
+      POSTGRES_PASSWORD: safebites_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - safebites-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U safebites_user -d safebites"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: safebites-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - safebites-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ../backend
+      dockerfile: ../docker/backend.Dockerfile
+    container_name: safebites-backend
+    environment:
+      - DATABASE_URL=postgresql://safebites_user:safebites_password@postgres:5432/safebites
+      - POSTGIS_ENABLED=true
+      - REDIS_URL=redis://redis:6379
+      - DEBUG=true
+      - LOG_LEVEL=INFO
+      - YELP_API_KEY=${YELP_API_KEY:-}
+      - OPENCAGE_API_KEY=${OPENCAGE_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - MOCK_MODE_ENABLED=${MOCK_MODE_ENABLED:-true}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - safebites-network
+    volumes:
+      - ../backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Next.js Frontend
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: ../docker/frontend.Dockerfile
+    container_name: safebites-frontend
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_APP_NAME=SafeBites
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - safebites-network
+    volumes:
+      - ../frontend:/app
+      - /app/node_modules
+    command: npm run dev
+
+volumes:
+  postgres_data:
+
+networks:
+  safebites-network:
+    driver: bridge 
